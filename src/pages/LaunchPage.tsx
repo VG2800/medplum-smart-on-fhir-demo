@@ -1,7 +1,7 @@
 import { Container, Loader, Text } from '@mantine/core';
 import { MedplumClient } from '@medplum/core';
 import { useMedplumContext } from '@medplum/react';
-import { JSX, useEffect, useState } from 'react';
+import { JSX, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { FHIR_SCOPE, MEDPLUM_CLIENT_ID, SMART_HEALTH_IT_CLIENT_ID } from '../config';
 
@@ -192,6 +192,8 @@ async function exchangeCodeForToken(
 function setupMedplumClient(tokenData: TokenResponse, iss: string, medplumContext: { medplum: MedplumClient }): void {
   // Store the access token and other relevant data
   sessionStorage.setItem('smart_patient', tokenData.patient);
+  sessionStorage.setItem('smart_access_token', tokenData.access_token);
+  sessionStorage.setItem('smart_base_url', iss);
 
   // Configure the Medplum client
   medplumContext.medplum = new MedplumClient({
@@ -205,8 +207,14 @@ export function LaunchPage(): JSX.Element {
   const navigate = useNavigate();
   const [error, setError] = useState<string>();
   const medplumContext = useMedplumContext();
+  const hasInitialized = useRef(false);
 
   useEffect(() => {
+    // Prevent running twice (strict mode or navigation back)
+    if (hasInitialized.current) {
+      return;
+    }
+
     const handleSmartLaunch = async (): Promise<void> => {
       try {
         const params = new URLSearchParams(window.location.search);
@@ -221,6 +229,25 @@ export function LaunchPage(): JSX.Element {
         }
 
         const launch = params.get('launch');
+        const code = params.get('code');
+
+        // Only check for existing auth if we have launch params (not just navigating back)
+        if (!launch && !code) {
+          // No SMART launch params, redirect to home
+          console.log('No SMART launch params, redirecting to home');
+          navigate('/');
+          return;
+        }
+
+        // Check if we're already authenticated and redirect to patient page
+        const existingToken = sessionStorage.getItem('smart_access_token');
+        const existingPatient = sessionStorage.getItem('smart_patient');
+        
+        if (existingToken && existingPatient && !launch && !code) {
+          console.log('Already authenticated, redirecting to patient page');
+          navigate('/patient');
+          return;
+        }
 
         if (launch) {
           console.log('Starting EHR launch with iss:', params.get('iss'));
@@ -248,6 +275,9 @@ export function LaunchPage(): JSX.Element {
 
         setupMedplumClient(tokenData, iss, medplumContext);
 
+        // Mark as initialized before navigating
+        hasInitialized.current = true;
+
         // Redirect to patient page
         navigate('/patient')?.catch(console.error);
       } catch (err) {
@@ -255,6 +285,7 @@ export function LaunchPage(): JSX.Element {
       }
     };
 
+    hasInitialized.current = true;
     handleSmartLaunch().catch((err) => {
       setError(err instanceof Error ? err.message : 'Unknown error');
     });

@@ -7,29 +7,101 @@ import {
   Divider,
   Grid,
   Group,
-  Select,
+  Loader,
   Stack,
   Table,
   Text,
   Title,
 } from '@mantine/core';
-import { calculateAgeString, formatDate, formatHumanName } from '@medplum/core';
-import { HumanName, Observation } from '@medplum/fhirtypes';
-import { ResourceAvatar } from '@medplum/react';
+import { calculateAgeString, formatDate, formatHumanName, MedplumClient } from '@medplum/core';
+import { AllergyIntolerance, Condition, HumanName, Immunization, MedicationRequest, Observation, Patient } from '@medplum/fhirtypes';
+import { ResourceAvatar, useMedplum } from '@medplum/react';
 import { ChartData } from 'chart.js';
 import { JSX, useEffect, useState } from 'react';
 import { LineChart } from '../components/LineChart';
-import { VoiceNotes } from '../components/VoiceNotes';
-import { getAvailablePatients, getPatientData, getVitalObservations, PatientBundle } from '../utils/patientData';
+
+interface PatientBundle {
+  patient: Patient;
+  observations: Observation[];
+  conditions: Condition[];
+  allergies: AllergyIntolerance[];
+  medications: MedicationRequest[];
+  immunizations: Immunization[];
+}
+
+function getVitalObservations(observations: Observation[]) {
+  return {
+    bloodPressure: observations.filter((obs) => obs.code?.coding?.[0]?.code === '85354-9'),
+    heartRate: observations.filter((obs) => obs.code?.coding?.[0]?.code === '8867-4'),
+    weight: observations.filter((obs) => obs.code?.coding?.[0]?.code === '29463-7'),
+    height: observations.filter((obs) => obs.code?.coding?.[0]?.code === '8302-2'),
+    bmi: observations.filter((obs) => obs.code?.coding?.[0]?.code === '39156-5'),
+    temperature: observations.filter((obs) => obs.code?.coding?.[0]?.code === '8310-5'),
+    respiratoryRate: observations.filter((obs) => obs.code?.coding?.[0]?.code === '9279-1'),
+  };
+}
 
 export function PatientPage(): JSX.Element {
-  const [selectedPatientId, setSelectedPatientId] = useState<string>('patient1');
   const [patientData, setPatientData] = useState<PatientBundle | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const data = getPatientData(selectedPatientId);
-    setPatientData(data);
-  }, [selectedPatientId]);
+    const fetchPatientData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // Get credentials from session storage (set during SMART launch)
+        const smartPatientId = sessionStorage.getItem('smart_patient');
+        const smartAccessToken = sessionStorage.getItem('smart_access_token');
+        const baseUrl = sessionStorage.getItem('smart_base_url');
+
+        if (!smartPatientId) {
+          throw new Error('No patient ID found. Please launch the app from your EHR.');
+        }
+
+        if (!smartAccessToken || !baseUrl) {
+          throw new Error('No authentication credentials found. Please launch the app from your EHR.');
+        }
+
+        // Create a medplum client with stored credentials
+        const medplum = new MedplumClient({
+          baseUrl: baseUrl,
+          fhirUrlPath: '',
+          accessToken: smartAccessToken,
+        });
+
+        // Fetch patient resource
+        const patient = await medplum.readResource('Patient', smartPatientId);
+
+        // Fetch all related resources in parallel
+        const [observations, conditions, allergies, medications, immunizations] = await Promise.all([
+          medplum.searchResources('Observation', { patient: `Patient/${smartPatientId}`, _count: '1000' }),
+          medplum.searchResources('Condition', { patient: `Patient/${smartPatientId}`, _count: '1000' }),
+          medplum.searchResources('AllergyIntolerance', { patient: `Patient/${smartPatientId}`, _count: '1000' }),
+          medplum.searchResources('MedicationRequest', { patient: `Patient/${smartPatientId}`, _count: '1000' }),
+          medplum.searchResources('Immunization', { patient: `Patient/${smartPatientId}`, _count: '1000' }),
+        ]);
+
+        setPatientData({
+          patient,
+          observations,
+          conditions,
+          allergies,
+          medications,
+          immunizations,
+        });
+      } catch (err) {
+        console.error('Error fetching patient data:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load patient data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPatientData();
+  }, []);
 
   const getBpChartData = (): ChartData<'line', number[]> => {
     if (!patientData) {
@@ -86,6 +158,30 @@ export function PatientPage(): JSX.Element {
     return systolic && diastolic ? { value: `${systolic}/${diastolic} mmHg`, date: date || 'Unknown' } : null;
   };
 
+  if (loading) {
+    return (
+      <Container size="lg" py="xl">
+        <Stack align="center" gap="md">
+          <Loader size="xl" />
+          <Text>Loading patient data...</Text>
+        </Stack>
+      </Container>
+    );
+  }
+
+  if (error) {
+    return (
+      <Container size="lg" py="xl">
+        <Card withBorder p="xl" bg="red.0">
+          <Text c="red" fw={600} size="lg" mb="sm">
+            Error Loading Patient Data
+          </Text>
+          <Text c="red">{error}</Text>
+        </Card>
+      </Container>
+    );
+  }
+
   if (!patientData) {
     return (
       <Container>
@@ -106,19 +202,9 @@ export function PatientPage(): JSX.Element {
   return (
     <Container size="xl" mt="xl" pb="xl">
       <Stack gap="lg">
-        {/* Patient Selector */}
+        {/* Patient Header */}
         <Card withBorder p="md">
-          <Group justify="space-between" align="center">
-            <Title order={2}>Patient Dashboard</Title>
-            <Select
-              label="Select Patient"
-              placeholder="Choose patient"
-              value={selectedPatientId}
-              onChange={(value) => setSelectedPatientId(value || 'patient1')}
-              data={getAvailablePatients().map((p) => ({ value: p.id, label: p.name }))}
-              w={250}
-            />
-          </Group>
+          <Title order={2}>Patient Dashboard</Title>
         </Card>
 
         {/* Patient Demographics */}
@@ -177,9 +263,6 @@ export function PatientPage(): JSX.Element {
             </Stack>
           </Group>
         </Card>
-
-        {/* Voice Notes / Clinical Notes */}
-        <VoiceNotes patientId={selectedPatientId} />
 
         {/* Vital Signs Summary */}
         <Card withBorder p="md">
@@ -270,7 +353,15 @@ export function PatientPage(): JSX.Element {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {conditions.slice(0, 10).map((condition, index) => (
+                {conditions
+                  .filter((c) => c.clinicalStatus?.coding?.[0]?.code === 'active')
+                  .sort((a, b) => {
+                    const dateA = a.onsetDateTime || a.recordedDate || '';
+                    const dateB = b.onsetDateTime || b.recordedDate || '';
+                    return dateB.localeCompare(dateA);
+                  })
+                  .slice(0, 10)
+                  .map((condition, index) => (
                   <Table.Tr key={index}>
                     <Table.Td>{condition.code?.coding?.[0]?.display || condition.code?.text || 'Unknown'}</Table.Td>
                     <Table.Td>
@@ -296,21 +387,43 @@ export function PatientPage(): JSX.Element {
           </Title>
           {allergies.length > 0 ? (
             <Grid>
-              {allergies.map((allergy, index) => (
+              {allergies
+                .filter((a) => a.clinicalStatus?.coding?.[0]?.code === 'active')
+                .sort((a, b) => {
+                  const criticalityOrder: { [key: string]: number } = { high: 0, 'unable-to-assess': 1, low: 2 };
+                  const critA = criticalityOrder[a.criticality || 'low'] ?? 1;
+                  const critB = criticalityOrder[b.criticality || 'low'] ?? 1;
+                  return critA - critB;
+                })
+                .map((allergy, index) => (
                 <Grid.Col key={index} span={{ base: 12, sm: 6, md: 4 }}>
                   <Card withBorder p="sm" bg="rgba(255, 193, 7, 0.05)">
                     <Group justify="space-between" mb="xs">
                       <Text fw={600}>{allergy.code?.coding?.[0]?.display || allergy.code?.text || 'Unknown'}</Text>
-                      <Badge color="yellow" size="sm">
-                        {allergy.criticality || 'Unknown'}
+                      <Badge 
+                        color={
+                          allergy.criticality === 'high' ? 'red' : 
+                          allergy.criticality === 'low' ? 'yellow' :
+                          'orange'
+                        } 
+                        size="sm"
+                      >
+                        {allergy.criticality || 'low'}
                       </Badge>
                     </Group>
-                    <Text size="sm" c="dimmed">
-                      Type: {allergy.type || 'N/A'}
+                    <Text size="sm" c="dimmed" tt="capitalize">
+                      Type: {allergy.type || 'allergy'}
                     </Text>
-                    <Text size="sm" c="dimmed">
-                      Status: {allergy.clinicalStatus?.coding?.[0]?.display || 'N/A'}
-                    </Text>
+                    {allergy.category && (
+                      <Text size="sm" c="dimmed" tt="capitalize">
+                        Category: {allergy.category.join(', ')}
+                      </Text>
+                    )}
+                    {allergy.reaction?.[0] && (
+                      <Text size="sm" c="dimmed">
+                        Reaction: {allergy.reaction[0].manifestation?.[0]?.text || allergy.reaction[0].manifestation?.[0]?.coding?.[0]?.display || 'N/A'}
+                      </Text>
+                    )}
                     {allergy.recordedDate && (
                       <Text size="xs" c="dimmed" mt="xs">
                         Recorded: {formatDate(allergy.recordedDate)}
@@ -341,7 +454,15 @@ export function PatientPage(): JSX.Element {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {medications.slice(0, 10).map((med, index) => (
+                {medications
+                  .filter((m) => m.status === 'active')
+                  .sort((a, b) => {
+                    const dateA = a.authoredOn || '';
+                    const dateB = b.authoredOn || '';
+                    return dateB.localeCompare(dateA);
+                  })
+                  .slice(0, 10)
+                  .map((med, index) => (
                   <Table.Tr key={index}>
                     <Table.Td>
                       {med.medicationCodeableConcept?.coding?.[0]?.display ||
@@ -352,8 +473,9 @@ export function PatientPage(): JSX.Element {
                       <Badge color={med.status === 'active' ? 'green' : 'gray'}>{med.status || 'Unknown'}</Badge>
                     </Table.Td>
                     <Table.Td>
-                      {med.dosageInstruction?.[0]?.doseAndRate?.[0]?.doseQuantity?.value || 'N/A'}{' '}
-                      {med.dosageInstruction?.[0]?.doseAndRate?.[0]?.doseQuantity?.unit || ''}
+                      {med.dosageInstruction?.[0]?.text || 
+                        `${med.dosageInstruction?.[0]?.doseAndRate?.[0]?.doseQuantity?.value || ''} ${med.dosageInstruction?.[0]?.doseAndRate?.[0]?.doseQuantity?.unit || ''}`.trim() || 
+                        'See instructions'}
                     </Table.Td>
                     <Table.Td>{med.authoredOn ? formatDate(med.authoredOn) : 'N/A'}</Table.Td>
                   </Table.Tr>
@@ -380,7 +502,14 @@ export function PatientPage(): JSX.Element {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {immunizations.slice(0, 10).map((immunization, index) => (
+                {immunizations
+                  .sort((a, b) => {
+                    const dateA = a.occurrenceDateTime || '';
+                    const dateB = b.occurrenceDateTime || '';
+                    return dateB.localeCompare(dateA);
+                  })
+                  .slice(0, 10)
+                  .map((immunization, index) => (
                   <Table.Tr key={index}>
                     <Table.Td>
                       {immunization.vaccineCode?.coding?.[0]?.display || immunization.vaccineCode?.text || 'Unknown'}

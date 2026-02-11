@@ -25,10 +25,27 @@ const patientDataMap = new Map<string, Bundle>([
 ]);
 
 export function getAvailablePatients(): Array<{ id: string; name: string }> {
-  return [
-    { id: 'patient1', name: 'Lucien408 Bosco882' },
-    { id: 'patient2', name: 'Dustin31 Ritchie586' },
-  ];
+  const patients: Array<{ id: string; name: string }> = [];
+  
+  patientDataMap.forEach((bundle, patientId) => {
+    if (bundle.entry) {
+      const patient = bundle.entry.find((e) => e.resource?.resourceType === 'Patient')?.resource as Patient;
+      if (patient && patient.name && patient.name[0]) {
+        const name = patient.name[0];
+        const fullName = [
+          ...(name.prefix || []),
+          name.given,
+          name.family,
+        ]
+          .filter(Boolean)
+          .join(' ');
+        
+        patients.push({ id: patientId, name: fullName });
+      }
+    }
+  });
+  
+  return patients;
 }
 
 export function getPatientData(patientId: string): PatientBundle | null {

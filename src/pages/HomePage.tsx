@@ -1,6 +1,5 @@
 import { Button, Container, Divider, Stack, Text, Title } from '@mantine/core';
 import { JSX } from 'react';
-import { useNavigate } from 'react-router';
 import {
   FHIR_SCOPE,
   MEDPLUM_AUTH_URL,
@@ -33,8 +32,6 @@ function SmartLaunch({ clientId, iss, children }: SmartLaunchProps): JSX.Element
 }
 
 export function HomePage(): JSX.Element {
-  const navigate = useNavigate();
-
   return (
     <Container size="md" mt="xl">
       <Stack>
@@ -44,17 +41,7 @@ export function HomePage(): JSX.Element {
           SMART-enabled EHR system.
         </Text>
 
-        <Divider my="md" label="View Sample Patient Data" labelPosition="center" />
-
-        <Button size="lg" variant="filled" onClick={() => navigate('/patient')}>
-          View Patient Dashboard (Local Data)
-        </Button>
-
-        <Text size="sm" c="dimmed" ta="center">
-          View comprehensive patient data from local JSON files
-        </Text>
-
-        <Divider my="md" label="Or Launch with SMART on FHIR" labelPosition="center" />
+        <Divider my="md" label="Launch with SMART on FHIR" labelPosition="center" />
 
         <Text>To test the app with live data, you can use one of these launch options:</Text>
 
