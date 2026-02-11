@@ -1,5 +1,6 @@
-import { Button, Container, Stack, Text, Title } from '@mantine/core';
+import { Button, Container, Divider, Stack, Text, Title } from '@mantine/core';
 import { JSX } from 'react';
+import { useNavigate } from 'react-router';
 import {
   FHIR_SCOPE,
   MEDPLUM_AUTH_URL,
@@ -32,6 +33,8 @@ function SmartLaunch({ clientId, iss, children }: SmartLaunchProps): JSX.Element
 }
 
 export function HomePage(): JSX.Element {
+  const navigate = useNavigate();
+
   return (
     <Container size="md" mt="xl">
       <Stack>
@@ -40,7 +43,20 @@ export function HomePage(): JSX.Element {
           This is a demonstration of SMART on FHIR capabilities using Medplum. You can launch this app from any
           SMART-enabled EHR system.
         </Text>
-        <Text>To test the app, you can use one of these launch options:</Text>
+
+        <Divider my="md" label="View Sample Patient Data" labelPosition="center" />
+
+        <Button size="lg" variant="filled" onClick={() => navigate('/patient')}>
+          View Patient Dashboard (Local Data)
+        </Button>
+
+        <Text size="sm" c="dimmed" ta="center">
+          View comprehensive patient data from local JSON files
+        </Text>
+
+        <Divider my="md" label="Or Launch with SMART on FHIR" labelPosition="center" />
+
+        <Text>To test the app with live data, you can use one of these launch options:</Text>
 
         <SmartLaunch clientId={MEDPLUM_CLIENT_ID} iss={MEDPLUM_AUTH_URL}>
           <Button>Launch with Medplum</Button>
