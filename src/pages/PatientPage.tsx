@@ -19,6 +19,7 @@ import { ResourceAvatar, useMedplum } from '@medplum/react';
 import { ChartData } from 'chart.js';
 import { JSX, useEffect, useState } from 'react';
 import { LineChart } from '../components/LineChart';
+import { VoiceNotes } from '../components/VoiceNotes';
 
 interface PatientBundle {
   patient: Patient;
@@ -263,6 +264,9 @@ export function PatientPage(): JSX.Element {
             </Stack>
           </Group>
         </Card>
+
+        {/* Voice Notes / Clinical Notes */}
+        <VoiceNotes patientId={patient.id || ''} />
 
         {/* Vital Signs Summary */}
         <Card withBorder p="md">
