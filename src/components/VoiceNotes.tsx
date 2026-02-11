@@ -1,6 +1,25 @@
-import { ActionIcon, Badge, Box, Button, Card, Group, Paper, Stack, Text, Textarea, Title } from '@mantine/core';
-import { IconMicrophone, IconMicrophoneOff, IconPlayerPlay, IconPlayerStop, IconTrash } from '@tabler/icons-react';
+import {
+  ActionIcon,
+  Badge,
+  Box,
+  Button,
+  Card,
+  Divider,
+  Group,
+  Loader,
+  Modal,
+  Paper,
+  Stack,
+  Text,
+  Textarea,
+  TextInput,
+  Title,
+  Tooltip,
+} from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
+import { IconBrain, IconMicrophone, IconMicrophoneOff, IconTrash } from '@tabler/icons-react';
 import { JSX, useEffect, useRef, useState } from 'react';
+import { isAIAvailable, summarizeNote } from '../utils/aiSummarizer';
 
 interface Note {
   id: string;
@@ -18,6 +37,10 @@ export function VoiceNotes({ patientId }: VoiceNotesProps): JSX.Element {
   const [isListening, setIsListening] = useState(false);
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [isSupported, setIsSupported] = useState(true);
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summarizingNoteId, setSummarizingNoteId] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState<string>('');
+  const [settingsOpened, { open: openSettings, close: closeSettings }] = useDisclosure(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   useEffect(() => {
@@ -72,6 +95,12 @@ export function VoiceNotes({ patientId }: VoiceNotesProps): JSX.Element {
     if (savedNotes) {
       const parsed = JSON.parse(savedNotes);
       setNotes(parsed.map((note: Note) => ({ ...note, timestamp: new Date(note.timestamp) })));
+    }
+
+    // Load API key from localStorage
+    const savedApiKey = localStorage.getItem('openai-api-key');
+    if (savedApiKey) {
+      setApiKey(savedApiKey);
     }
 
     return () => {
@@ -134,6 +163,76 @@ export function VoiceNotes({ patientId }: VoiceNotesProps): JSX.Element {
     }
   };
 
+  const summarizeCurrentTranscript = async (): Promise<void> => {
+    if (!currentTranscript.trim()) return;
+
+    setIsSummarizing(true);
+    try {
+      const summarized = await summarizeNote({
+        text: currentTranscript,
+        apiKey: apiKey || undefined,
+      });
+      setCurrentTranscript(summarized);
+    } catch (error) {
+      alert('Failed to summarize note. Using local cleanup instead.');
+      // Fallback to local summarizer
+      const summarized = await summarizeNote({
+        text: currentTranscript,
+        apiKey: undefined,
+      });
+      setCurrentTranscript(summarized);
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
+  const summarizeExistingNote = async (noteId: string): Promise<void> => {
+    const note = notes.find((n) => n.id === noteId);
+    if (!note) return;
+
+    setSummarizingNoteId(noteId);
+    try {
+      const summarized = await summarizeNote({
+        text: note.text,
+        apiKey: apiKey || undefined,
+      });
+
+      setNotes((prev) =>
+        prev.map((n) =>
+          n.id === noteId
+            ? {
+                ...n,
+                text: summarized,
+              }
+            : n
+        )
+      );
+    } catch (error) {
+      alert('Failed to summarize note. Using local cleanup instead.');
+      const summarized = await summarizeNote({
+        text: note.text,
+        apiKey: undefined,
+      });
+      setNotes((prev) =>
+        prev.map((n) =>
+          n.id === noteId
+            ? {
+                ...n,
+                text: summarized,
+              }
+            : n
+        )
+      );
+    } finally {
+      setSummarizingNoteId(null);
+    }
+  };
+
+  const saveApiKey = (): void => {
+    localStorage.setItem('openai-api-key', apiKey);
+    closeSettings();
+  };
+
   const formatTimestamp = (date: Date): string => {
     return new Intl.DateTimeFormat('en-US', {
       month: 'short',
@@ -158,14 +257,21 @@ export function VoiceNotes({ patientId }: VoiceNotesProps): JSX.Element {
 
   return (
     <Card withBorder p="md">
-      <Title order={2} mb="md">
-        Clinical Notes
-        {isListening && (
-          <Badge color="red" variant="filled" size="lg" ml="md" style={{ animation: 'pulse 1.5s infinite' }}>
-            Recording...
-          </Badge>
-        )}
-      </Title>
+      <Group justify="space-between" mb="md">
+        <Group>
+          <Title order={2}>Clinical Notes</Title>
+          {isListening && (
+            <Badge color="red" variant="filled" size="lg" style={{ animation: 'pulse 1.5s infinite' }}>
+              Recording...
+            </Badge>
+          )}
+        </Group>
+        <Tooltip label="AI Settings (Optional)">
+          <Button size="xs" variant="light" onClick={openSettings}>
+            AI Settings
+          </Button>
+        </Tooltip>
+      </Group>
 
       <Stack gap="md">
         {/* Recording Interface */}
@@ -196,9 +302,20 @@ export function VoiceNotes({ patientId }: VoiceNotesProps): JSX.Element {
                     Start Voice Recording
                   </Button>
                   {currentTranscript.trim() && (
-                    <Button onClick={saveManualNote} variant="outline">
-                      Save Note
-                    </Button>
+                    <>
+                      <Button
+                        leftSection={isSummarizing ? <Loader size="xs" /> : <IconBrain size={18} />}
+                        onClick={summarizeCurrentTranscript}
+                        variant="light"
+                        color="blue"
+                        disabled={isSummarizing}
+                      >
+                        {isSummarizing ? 'Summarizing...' : 'AI Summarize'}
+                      </Button>
+                      <Button onClick={saveManualNote} variant="outline">
+                        Save Note
+                      </Button>
+                    </>
                   )}
                 </>
               ) : (
@@ -228,11 +345,23 @@ export function VoiceNotes({ patientId }: VoiceNotesProps): JSX.Element {
                     <Text size="xs" c="dimmed">
                       {formatTimestamp(note.timestamp)}
                     </Text>
-                    <ActionIcon color="red" variant="subtle" onClick={() => deleteNote(note.id)}>
-                      <IconTrash size={16} />
-                    </ActionIcon>
+                    <Group gap="xs">
+                      <Tooltip label="Summarize with AI">
+                        <ActionIcon
+                          color="blue"
+                          variant="subtle"
+                          onClick={() => summarizeExistingNote(note.id)}
+                          disabled={summarizingNoteId === note.id}
+                        >
+                          {summarizingNoteId === note.id ? <Loader size="xs" /> : <IconBrain size={16} />}
+                        </ActionIcon>
+                      </Tooltip>
+                      <ActionIcon color="red" variant="subtle" onClick={() => deleteNote(note.id)}>
+                        <IconTrash size={16} />
+                      </ActionIcon>
+                    </Group>
                   </Group>
-                  <Text>{note.text}</Text>
+                  <Text style={{ whiteSpace: 'pre-wrap' }}>{note.text}</Text>
                 </Paper>
               ))}
             </Stack>
@@ -254,6 +383,46 @@ export function VoiceNotes({ patientId }: VoiceNotesProps): JSX.Element {
           50% { opacity: 0.5; }
         }
       `}</style>
+
+      {/* AI Settings Modal */}
+      <Modal opened={settingsOpened} onClose={closeSettings} title="AI Summarizer Settings" size="md">
+        <Stack>
+          <Text size="sm" c="dimmed">
+            Configure OpenAI API for better AI-powered note summarization. Without an API key, basic local text cleanup
+            will be used instead.
+          </Text>
+
+          <TextInput
+            label="OpenAI API Key (Optional)"
+            placeholder="sk-..."
+            value={apiKey}
+            onChange={(e) => setApiKey(e.currentTarget.value)}
+            type="password"
+            description="Your API key is stored locally in your browser and never sent to our servers."
+          />
+
+          <Group justify="flex-end">
+            <Button variant="subtle" onClick={closeSettings}>
+              Cancel
+            </Button>
+            <Button onClick={saveApiKey}>Save Settings</Button>
+          </Group>
+
+          <Divider my="xs" />
+
+          <Text size="xs" c="dimmed">
+            {isAIAvailable(apiKey)
+              ? '✓ AI Summarization is available'
+              : '○ Using local text cleanup (no AI API configured)'}
+          </Text>
+          <Text size="xs" c="dimmed">
+            Get your API key from:{' '}
+            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">
+              https://platform.openai.com/api-keys
+            </a>
+          </Text>
+        </Stack>
+      </Modal>
     </Card>
   );
 }
