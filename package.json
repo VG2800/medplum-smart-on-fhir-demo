@@ -53,5 +53,8 @@
   "packageManager": "npm@10.9.2",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@medplum/react-hooks": "^4.2.4"
   }
 }

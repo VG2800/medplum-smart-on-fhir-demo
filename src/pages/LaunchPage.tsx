@@ -15,6 +15,25 @@ interface TokenResponse {
   patient: string;
 }
 
+// PKCE helper functions
+function generateCodeVerifier(): string {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return base64UrlEncode(array);
+}
+
+function base64UrlEncode(buffer: Uint8Array): string {
+  const base64 = btoa(String.fromCharCode(...Array.from(buffer)));
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+async function generateCodeChallenge(verifier: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return base64UrlEncode(new Uint8Array(hash));
+}
+
 function getClientId(params: URLSearchParams, iss: string): string {
   // First try to get from URL params
   const clientId = params.get('client_id');
@@ -34,14 +53,24 @@ function getClientId(params: URLSearchParams, iss: string): string {
 }
 
 async function fetchSmartConfiguration(iss: string): Promise<SmartConfiguration> {
-  const response = await fetch(`${iss}/.well-known/smart-configuration`, {
+  // Special handling for Medplum
+  if (iss.includes('medplum.com')) {
+    return {
+      authorization_endpoint: 'https://api.medplum.com/oauth2/authorize',
+      token_endpoint: 'https://api.medplum.com/oauth2/token',
+    };
+  }
+
+  // Try standard SMART configuration endpoint
+  const configUrl = `${iss}/.well-known/smart-configuration`;
+  const response = await fetch(configUrl, {
     headers: {
       Accept: 'application/json',
     },
   });
 
   if (!response.ok) {
-    throw new Error('Failed to fetch SMART configuration');
+    throw new Error(`Failed to fetch SMART configuration from ${configUrl}: ${response.status} ${response.statusText}`);
   }
 
   return response.json();
@@ -64,6 +93,11 @@ async function initiateEhrLaunch(params: URLSearchParams): Promise<never> {
   const state = crypto.randomUUID();
   sessionStorage.setItem('smart_state', state);
 
+  // Generate PKCE code verifier and challenge
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = await generateCodeChallenge(codeVerifier);
+  sessionStorage.setItem('smart_code_verifier', codeVerifier);
+
   // Get the appropriate client ID
   const clientId = getClientId(params, iss);
 
@@ -76,6 +110,8 @@ async function initiateEhrLaunch(params: URLSearchParams): Promise<never> {
     state,
     aud: iss,
     launch: launch as string,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
   });
 
   const url = new URL(config.authorization_endpoint);
@@ -102,7 +138,8 @@ function validateAuthResponse(params: URLSearchParams): void {
   }
 
   if (state !== storedState) {
-    throw new Error('State parameter mismatch - possible security issue');
+    console.error('State mismatch:', { received: state, stored: storedState });
+    throw new Error('State parameter mismatch - possible session expired. Please try launching the app again.');
   }
 }
 
@@ -112,21 +149,41 @@ async function exchangeCodeForToken(
   clientId: string
 ): Promise<TokenResponse> {
   const code = params.get('code');
+  const codeVerifier = sessionStorage.getItem('smart_code_verifier');
+  
+  if (!codeVerifier) {
+    throw new Error('Missing code verifier - session may have expired');
+  }
+  
+  const tokenBody = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code: code as string,
+    redirect_uri: window.location.origin + '/launch',
+    client_id: clientId,
+    code_verifier: codeVerifier,
+  });
+  
+  console.log('Token exchange request:', {
+    endpoint: config.token_endpoint,
+    body: Object.fromEntries(tokenBody.entries()),
+  });
+  
   const tokenResponse = await fetch(config.token_endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: code as string,
-      redirect_uri: window.location.origin + '/launch',
-      client_id: clientId,
-    }).toString(),
+    body: tokenBody.toString(),
   });
 
   if (!tokenResponse.ok) {
-    throw new Error('Failed to get access token');
+    const errorText = await tokenResponse.text();
+    console.error('Token exchange failed:', {
+      status: tokenResponse.status,
+      statusText: tokenResponse.statusText,
+      body: errorText,
+    });
+    throw new Error(`Failed to get access token: ${tokenResponse.status} ${errorText}`);
   }
 
   return tokenResponse.json();
@@ -153,14 +210,26 @@ export function LaunchPage(): JSX.Element {
     const handleSmartLaunch = async (): Promise<void> => {
       try {
         const params = new URLSearchParams(window.location.search);
+        
+        console.log('Launch page params:', Object.fromEntries(params.entries()));
+        
+        // Check for OAuth error response
+        const error = params.get('error');
+        const errorDescription = params.get('error_description');
+        if (error) {
+          throw new Error(`OAuth error: ${error}${errorDescription ? ` - ${errorDescription}` : ''}`);
+        }
+
         const launch = params.get('launch');
 
         if (launch) {
+          console.log('Starting EHR launch with iss:', params.get('iss'));
           await initiateEhrLaunch(params);
           return;
         }
 
         // Handle authorization response
+        console.log('Processing authorization response');
         validateAuthResponse(params);
 
         const iss = sessionStorage.getItem('smart_iss');
@@ -175,6 +244,7 @@ export function LaunchPage(): JSX.Element {
         // Clean up session storage
         sessionStorage.removeItem('smart_state');
         sessionStorage.removeItem('smart_iss');
+        sessionStorage.removeItem('smart_code_verifier');
 
         setupMedplumClient(tokenData, iss, medplumContext);
 
